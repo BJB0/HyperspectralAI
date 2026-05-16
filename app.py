@@ -2,6 +2,7 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+import tensorflow as tf 
 
 from PIL import Image
 from scipy.io import loadmat
@@ -9,6 +10,8 @@ from scipy.io import loadmat
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense
 
 # =========================================
 # PAGE CONFIG
@@ -33,7 +36,8 @@ method = st.sidebar.selectbox(
     [
         "KMeans",
         "PCA + KMeans",
-        "Spatial-Spectral"
+        "Spatial-Spectral",
+        "Autoencoder"
     ]
 )
 
@@ -47,8 +51,8 @@ n_clusters = st.sidebar.slider(
 pca_components = st.sidebar.slider(
     "PCA Components",
     2,
-    50,
-    10
+    max_pca,
+    min(10, max_pca)
 )
 
 patch_size = st.sidebar.slider(
@@ -57,6 +61,13 @@ patch_size = st.sidebar.slider(
   9,
   3,
   step=2
+)
+
+latent_dim = st.sidebar.slider(
+    "latent Dimension",
+    2,
+    50,
+    10
 )
 
 # =========================================
@@ -116,7 +127,33 @@ def extract_patches(image, patch_size=3):
             patches.append(patch.flatten())
 
     return np.array(patches)
-  
+
+def build_autoencoder(input_dim, latent_dim=10):
+    
+    inp = Input(shape=(input_dim,))
+    
+    # encoder
+    x = Dense(256, activation='relu')(inp) 
+    x = Dense(128, activation='relu')(x)
+    
+    latent = Dense(latent_dim)(x)
+    
+    # decoder
+    x = Dense(128, activation='relu')(latent)
+    x = Dense(256, activation='relu')(x)
+    
+    out = Dense(input_dim)(x)
+    
+    autoencoder = Model(inp, out)
+    
+    encoder = Model(inp, latent)
+    
+    autoencoder.compile(
+        optimizer='adam',
+        loss='mse'
+    )
+    
+    return autoencoder, encoder
 
 # =========================================
 # LOAD IMAGE
@@ -300,32 +337,86 @@ if uploaded_file is not None:
       )
 
       labels = kmeans.fit_predict(reduced)
+      
+      # =====================================
+      # METHOD 4: AUTOENCODER
+      # =====================================
+      
+    elif method == "Autoencoder":
         
+        st.subheader("Running Autoencoder Clustering...")
+        
+        # extract patches
+        patches = extract_patches(
+            image,
+            patch_size=patch_size
+        )
+        
+        # normalize
+        scaler = StandardScaler()
+
+        patches_scaled = scaler.fit_transform(patches)
+
+        # PCA (optional but helps)
+        pca = PCA(n_components=pca_components)
+
+        reduced = pca.fit_transform(patches_scaled)
+      
+        # build AE
+        autoencoder, encoder = build_autoencoder(
+            reduced.shape[1],
+            latent_dim
+        )
+        
+        # train
+        with st.spinner("Training Autoencoder..."):
+            autoencoder.fit(
+                reduced,
+                reduced,
+                epochs=20,
+                batch_size=256,
+                verbose=0
+                )
+
+        # latent features
+        features = encoder.predict(
+            reduced,
+            batch_size=256
+        )
+
+        # clustering
+        kmeans = KMeans(
+            n_clusters=n_clusters,
+            random_state=42,
+            n_init=10
+        )
+
+        labels = kmeans.fit_predict(features)
         
         
         
         
 
       # PCA visualization
-      st.subheader("PCA Visualization")
+    st.subheader("PCA Visualization")
 
-      pca_vis = reduced[:, :3]
+    pca_vis = reduced[:, :3]
 
-      pca_vis = (
+    pca_vis = (
         pca_vis - pca_vis.min()
         ) / (
             pca_vis.max() - pca_vis.min()
         )
 
-      pca_vis = pca_vis.reshape(h, w, 3)
+    pca_vis = pca_vis.reshape(h, w, 3)
 
-      fig2, ax2 = plt.subplots(figsize=(6,6))
+    fig2, ax2 = plt.subplots(figsize=(6,6))
 
-      ax2.imshow(pca_vis)
-      ax2.set_title("PCA Image")
-      ax2.axis("off")
+    ax2.imshow(pca_vis)
+    ax2.set_title("PCA Image")
+    ax2.axis("off")
 
-      st.pyplot(fig2)
+    st.pyplot(fig2)
 
     # =====================================
     # CLUSTER MAP
