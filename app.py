@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.optimizers import Adam
 
 # =========================================
 # PAGE CONFIG
@@ -37,7 +38,8 @@ method = st.sidebar.selectbox(
         "KMeans",
         "PCA + KMeans",
         "Spatial-Spectral",
-        "Autoencoder"
+        "Autoencoder",
+        "DEC"
     ]
 )
 
@@ -48,12 +50,15 @@ n_clusters = st.sidebar.slider(
     5
 )
 
+max_pca = min(50, c)
+
 pca_components = st.sidebar.slider(
     "PCA Components",
     2,
     max_pca,
     min(10, max_pca)
 )
+
 
 patch_size = st.sidebar.slider(
   "Patch Size",
@@ -154,6 +159,38 @@ def build_autoencoder(input_dim, latent_dim=10):
     )
     
     return autoencoder, encoder
+
+# =========================================
+# DEC FUNCTIONS
+# =========================================
+
+def soft_assign(z, centers):
+
+    dist = np.sum(
+        (z[:, None] - centers)**2,
+        axis=2
+    )
+
+    q = 1.0 / (1.0 + dist)
+
+    q = q / np.sum(
+        q,
+        axis=1,
+        keepdims=True
+    )
+
+    return q
+
+
+def target_distribution(q):
+
+    weight = q**2 / np.sum(q, axis=0)
+
+    return (
+        weight.T / np.sum(weight, axis=1)
+    ).T
+
+
 
 # =========================================
 # LOAD IMAGE
@@ -262,6 +299,10 @@ if uploaded_file is not None:
     # =====================================
 
     h, w, c = image.shape
+    
+    # warning for large images
+    if image.shape[0] * image.shape[1] > 300000:
+        st.warning("Large image detected. Processing may be slow.")
 
     pixels = image.reshape(-1, c)
 
@@ -392,21 +433,171 @@ if uploaded_file is not None:
         )
 
         labels = kmeans.fit_predict(features)
+    
+    # =====================================
+    # METHOD 5: DEC
+    # =====================================
+
+    elif method == "DEC":
+        st.subheader("Running Deep Embedded Clustering...")
+
+        # ---------------------------------
+        # PATCHES
+        # ---------------------------------
+        patches = extract_patches(
+        image,
+        patch_size=patch_size
+        )
+        scaler = StandardScaler()
+        patches_scaled = scaler.fit_transform(
+        patches
+        )
+
+        # ---------------------------------
+        # PCA
+        # ---------------------------------
+
+        pca = PCA(
+            n_components=pca_components
+        )
+        reduced = pca.fit_transform(
+            patches_scaled
+        )
+
+        # ---------------------------------
+        # BUILD AE
+        # ---------------------------------
+
+        autoencoder, encoder = build_autoencoder(
+            reduced.shape[1],
+            latent_dim
+        )
+
+        # ---------------------------------
+        # PRETRAIN AE
+        # ---------------------------------
+        
+        with st.spinner("Pretraining Autoencoder..."):
+            
+            autoencoder.fit(
+            reduced,
+            reduced,
+            epochs=10,
+            batch_size=256,
+            verbose=0
+        )
+
+        # ---------------------------------
+        # INITIAL FEATURES
+        # ---------------------------------
+        features = encoder.predict(
+            reduced,
+            batch_size=256
+            )
+
+        # ---------------------------------
+        # INITIAL KMEANS
+        # ---------------------------------
+
+        kmeans = KMeans(
+            n_clusters=n_clusters,
+            n_init=10,
+            random_state=42
+            )
+
+        labels = kmeans.fit_predict(
+            features
+            )
+        cluster_centers = kmeans.cluster_centers_
+
+        # ---------------------------------
+        # DEC REFINEMENT
+        # ---------------------------------
+
+        optimizer = Adam(0.0001)
+        for ite in range(20):
+            
+            with tf.GradientTape() as tape:
+                z = encoder(
+                    reduced,
+                    training=True
+                )
+
+                z_np = z.numpy()
+
+                q = soft_assign(
+                    z_np,
+                    cluster_centers
+                )
+
+                p = target_distribution(q)
+
+                q_tf = tf.convert_to_tensor(
+                    q,
+                    dtype=tf.float32
+                )
+
+                p_tf = tf.convert_to_tensor(
+                    p,
+                    dtype=tf.float32
+                )
+
+                loss = tf.keras.losses.KLDivergence()(
+                    p_tf,
+                    q_tf
+                )
+
+            grads = tape.gradient(
+                loss,
+                encoder.trainable_weights
+                )
+
+            optimizer.apply_gradients(
+                zip(
+                    grads,
+                    encoder.trainable_weights
+                )
+            )
+
+        # ---------------------------------
+        # FINAL FEATURES
+        # ---------------------------------
+
+        final_features = encoder.predict(
+            reduced,
+            batch_size=256
+        )
+
+        # ---------------------------------
+        # FINAL CLUSTERING
+        # ---------------------------------
+
+        kmeans = KMeans(
+            n_clusters=n_clusters,
+            random_state=42,
+            n_init=10
+            )
+
+        labels = kmeans.fit_predict(
+            final_features
+        )
         
         
         
         
 
-      # PCA visualization
+    # PCA visualization
+if method != "KMeans":
+
     st.subheader("PCA Visualization")
 
     pca_vis = reduced[:, :3]
 
     pca_vis = (
         pca_vis - pca_vis.min()
-        ) / (
-            pca_vis.max() - pca_vis.min()
-        )
+    ) / (
+        pca_vis.max() - pca_vis.min()
+    )
 
     pca_vis = pca_vis.reshape(h, w, 3)
 
