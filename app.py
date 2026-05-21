@@ -1,18 +1,40 @@
+# =========================================
+# app.py
+# HyperClusterAI
+# FINAL MODULAR VERSION
+# =========================================
+
+# =========================================
+# IMPORTS
+# =========================================
 
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-import tensorflow as tf 
 
 from PIL import Image
 from scipy.io import loadmat
 
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras.optimizers import Adam
+
+# =========================================
+# IMPORT CUSTOM MODULES
+# =========================================
+
+from utils.preprocessing import detect_image_type
+
+from utils.metrics import calculate_metrics
+
+from clustering.kmeans import run_kmeans
+
+from clustering.pca_kmeans import run_pca_kmeans
+
+from clustering.spatial import run_spatial
+
+from clustering.autoencoder import run_autoencoder
+
+from clustering.dec import run_dec
+
 
 # =========================================
 # PAGE CONFIG
@@ -24,7 +46,10 @@ st.set_page_config(
 )
 
 st.title("🌾 HyperClusterAI")
-st.subheader("Universal Spatial-Spectral Intelligent Segmentation System")
+
+st.subheader(
+    "Universal Spatial-Spectral Intelligent Segmentation System"
+)
 
 # =========================================
 # SIDEBAR
@@ -32,16 +57,56 @@ st.subheader("Universal Spatial-Spectral Intelligent Segmentation System")
 
 st.sidebar.header("Settings")
 
-method = st.sidebar.selectbox(
-    "Select Clustering Method",
+# =========================================
+# MODE
+# =========================================
+
+mode = st.sidebar.radio(
+    "Mode",
     [
-        "KMeans",
-        "PCA + KMeans",
-        "Spatial-Spectral",
-        "Autoencoder",
-        "DEC"
+        "Single Method",
+        "Compare Methods"
     ]
 )
+
+# =========================================
+# SINGLE METHOD
+# =========================================
+
+if mode == "Single Method":
+
+    method = st.sidebar.selectbox(
+        "Select Clustering Method",
+        [
+            "KMeans",
+            "PCA + KMeans",
+            "Spatial-Spectral",
+            "Autoencoder",
+            "DEC"
+        ]
+    )
+
+# =========================================
+# COMPARE METHODS
+# =========================================
+
+else:
+
+    compare_methods = st.sidebar.multiselect(
+        "Select Methods",
+        [
+            "KMeans",
+            "PCA + KMeans",
+            "Spatial-Spectral",
+            "Autoencoder",
+            "DEC"
+        ],
+        default=["KMeans", "DEC"]
+    )
+
+# =========================================
+# PARAMETERS
+# =========================================
 
 n_clusters = st.sidebar.slider(
     "Number of Clusters",
@@ -50,29 +115,30 @@ n_clusters = st.sidebar.slider(
     5
 )
 
-max_pca = min(50, c)
+patch_size = st.sidebar.slider(
+    "Patch Size",
+    3,
+    9,
+    3,
+    step=2
+)
+
+latent_dim = st.sidebar.slider(
+    "Latent Dimension",
+    2,
+    50,
+    10
+)
 
 pca_components = st.sidebar.slider(
     "PCA Components",
     2,
-    max_pca,
-    min(10, max_pca)
-)
-
-
-patch_size = st.sidebar.slider(
-  "Patch Size",
-  3,
-  9,
-  3,
-  step=2
-)
-
-latent_dim = st.sidebar.slider(
-    "latent Dimension",
-    2,
     50,
     10
+)
+
+run_button = st.sidebar.button(
+    "Run Clustering"
 )
 
 # =========================================
@@ -84,136 +150,42 @@ uploaded_file = st.file_uploader(
     type=["jpg", "png", "jpeg", "npy", "mat"]
 )
 
-# =========================================
-# IMAGE TYPE DETECTION
-# =========================================
-
-def detect_image_type(data):
-
-    if len(data.shape) == 3:
-
-        if data.shape[2] <= 4:
-            return "RGB"
-
-        else:
-            return "HSI"
-
-    return "UNKNOWN"
-  
-  
-  
-# =========================================
-# PATCH EXTRACTION
-# =========================================
-
-def extract_patches(image, patch_size=3):
-
-    pad = patch_size // 2
-
-    h, w, c = image.shape
-
-    padded = np.pad(
-        image,
-        ((pad, pad), (pad, pad), (0, 0)),
-        mode='reflect'
-    )
-
-    patches = []
-
-    for i in range(h):
-
-        for j in range(w):
-
-            patch = padded[
-                i:i+patch_size,
-                j:j+patch_size
-            ]
-
-            patches.append(patch.flatten())
-
-    return np.array(patches)
-
-def build_autoencoder(input_dim, latent_dim=10):
-    
-    inp = Input(shape=(input_dim,))
-    
-    # encoder
-    x = Dense(256, activation='relu')(inp) 
-    x = Dense(128, activation='relu')(x)
-    
-    latent = Dense(latent_dim)(x)
-    
-    # decoder
-    x = Dense(128, activation='relu')(latent)
-    x = Dense(256, activation='relu')(x)
-    
-    out = Dense(input_dim)(x)
-    
-    autoencoder = Model(inp, out)
-    
-    encoder = Model(inp, latent)
-    
-    autoencoder.compile(
-        optimizer='adam',
-        loss='mse'
-    )
-    
-    return autoencoder, encoder
+gt_file = st.file_uploader(
+    "Upload Ground Truth (Optional)",
+    type=["npy", "mat"]
+)
 
 # =========================================
-# DEC FUNCTIONS
+# MAIN PIPELINE
 # =========================================
 
-def soft_assign(z, centers):
-
-    dist = np.sum(
-        (z[:, None] - centers)**2,
-        axis=2
-    )
-
-    q = 1.0 / (1.0 + dist)
-
-    q = q / np.sum(
-        q,
-        axis=1,
-        keepdims=True
-    )
-
-    return q
-
-
-def target_distribution(q):
-
-    weight = q**2 / np.sum(q, axis=0)
-
-    return (
-        weight.T / np.sum(weight, axis=1)
-    ).T
-
-
-
-# =========================================
-# LOAD IMAGE
-# =========================================
-
-if uploaded_file is not None:
+if uploaded_file is not None and run_button:
 
     file_name = uploaded_file.name
 
-    # -------------------------------------
-    # RGB IMAGE
-    # -------------------------------------
+    # =====================================
+    # LOAD RGB IMAGE
+    # =====================================
 
     if file_name.endswith(("jpg", "png", "jpeg")):
 
         image = Image.open(uploaded_file)
+
         image = np.array(image)
+
+        # grayscale safety
+        if len(image.shape) == 2:
+
+            image = np.stack(
+                [image]*3,
+                axis=-1
+            )
 
         image_type = "RGB"
 
-    # -------------------------------------
-    # NPY FILE
-    # -------------------------------------
+    # =====================================
+    # LOAD NPY
+    # =====================================
 
     elif file_name.endswith("npy"):
 
@@ -221,9 +193,9 @@ if uploaded_file is not None:
 
         image_type = detect_image_type(image)
 
-    # -------------------------------------
-    # MAT FILE
-    # -------------------------------------
+    # =====================================
+    # LOAD MAT
+    # =====================================
 
     elif file_name.endswith("mat"):
 
@@ -244,37 +216,70 @@ if uploaded_file is not None:
         st.stop()
 
     # =====================================
-    # DISPLAY INFO
+    # LOAD GROUND TRUTH
     # =====================================
 
-    st.success(f"Detected Image Type: {image_type}")
+    gt = None
 
-    st.write(f"Image Shape: {image.shape}")
+    if gt_file is not None:
+
+        if gt_file.name.endswith("npy"):
+
+            gt = np.load(gt_file)
+
+        elif gt_file.name.endswith("mat"):
+
+            gt_data = loadmat(gt_file)
+
+            possible_keys = [
+                k for k in gt_data.keys()
+                if not k.startswith("__")
+            ]
+
+            gt = gt_data[possible_keys[0]]
 
     # =====================================
-    # RGB VISUALIZATION
+    # IMAGE INFO
+    # =====================================
+
+    st.success(
+        f"Detected Image Type: {image_type}"
+    )
+
+    st.write(
+        f"Image Shape: {image.shape}"
+    )
+
+    h, w, c = image.shape
+
+    # =====================================
+    # LARGE IMAGE WARNING
+    # =====================================
+
+    if h * w > 300000:
+
+        st.warning(
+            "Large image detected. Processing may be slow."
+        )
+
+    # =====================================
+    # DISPLAY IMAGE
     # =====================================
 
     if image_type == "RGB":
 
         display_image = image
 
-    # =====================================
-    # HSI VISUALIZATION
-    # =====================================
-
-    elif image_type == "HSI":
+    else:
 
         bands = image.shape[2]
 
-        # false color image
         b1 = min(10, bands-1)
         b2 = min(20, bands-1)
         b3 = min(30, bands-1)
 
         display_image = image[:, :, [b1, b2, b3]]
 
-        # normalize for display
         display_image = (
             display_image - display_image.min()
         ) / (
@@ -288,8 +293,11 @@ if uploaded_file is not None:
     st.subheader("Original Image")
 
     fig1, ax1 = plt.subplots(figsize=(6,6))
+
     ax1.imshow(display_image)
+
     ax1.set_title("Input Image")
+
     ax1.axis("off")
 
     st.pyplot(fig1)
@@ -298,352 +306,449 @@ if uploaded_file is not None:
     # PREPROCESSING
     # =====================================
 
-    h, w, c = image.shape
-    
-    # warning for large images
-    if image.shape[0] * image.shape[1] > 300000:
-        st.warning("Large image detected. Processing may be slow.")
-
     pixels = image.reshape(-1, c)
 
     scaler = StandardScaler()
 
-    pixels_scaled = scaler.fit_transform(pixels)
-
-    # =====================================
-    # METHOD 1: KMEANS
-    # =====================================
-
-    if method == "KMeans":
-
-        st.subheader("Running KMeans Clustering...")
-
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            random_state=42,
-            n_init=10
-        )
-
-        labels = kmeans.fit_predict(pixels_scaled)
-
-    # =====================================
-    # METHOD 2: PCA + KMEANS
-    # =====================================
-
-    elif method == "PCA + KMeans":
-
-        st.subheader("Running PCA + KMeans...")
-
-        pca = PCA(n_components=pca_components)
-
-        reduced = pca.fit_transform(pixels_scaled)
-
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            random_state=42,
-            n_init=10
-        )
-
-        labels = kmeans.fit_predict(reduced)
-        
-        
-      # =====================================
-      # METHOD 3: SPATIAL-SPECTRAL
-      # =====================================
-
-    elif method == "Spatial-Spectral":
-      st.subheader("Running Spatial-Spectral Clustering...")
-
-      # extract patches
-      patches = extract_patches(
-        image,
-        patch_size=patch_size
-      )
-
-      # normalize
-      scaler = StandardScaler()
-
-      patches_scaled = scaler.fit_transform(patches)
-
-      # PCA
-      pca = PCA(n_components=pca_components)
-
-      reduced = pca.fit_transform(patches_scaled)
-
-      # clustering
-      kmeans = KMeans(
-        n_clusters=n_clusters,
-        random_state=42,
-        n_init=10
-      )
-
-      labels = kmeans.fit_predict(reduced)
-      
-      # =====================================
-      # METHOD 4: AUTOENCODER
-      # =====================================
-      
-    elif method == "Autoencoder":
-        
-        st.subheader("Running Autoencoder Clustering...")
-        
-        # extract patches
-        patches = extract_patches(
-            image,
-            patch_size=patch_size
-        )
-        
-        # normalize
-        scaler = StandardScaler()
-
-        patches_scaled = scaler.fit_transform(patches)
-
-        # PCA (optional but helps)
-        pca = PCA(n_components=pca_components)
-
-        reduced = pca.fit_transform(patches_scaled)
-      
-        # build AE
-        autoencoder, encoder = build_autoencoder(
-            reduced.shape[1],
-            latent_dim
-        )
-        
-        # train
-        with st.spinner("Training Autoencoder..."):
-            autoencoder.fit(
-                reduced,
-                reduced,
-                epochs=20,
-                batch_size=256,
-                verbose=0
-                )
-
-        # latent features
-        features = encoder.predict(
-            reduced,
-            batch_size=256
-        )
-
-        # clustering
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            random_state=42,
-            n_init=10
-        )
-
-        labels = kmeans.fit_predict(features)
-    
-    # =====================================
-    # METHOD 5: DEC
-    # =====================================
-
-    elif method == "DEC":
-        st.subheader("Running Deep Embedded Clustering...")
-
-        # ---------------------------------
-        # PATCHES
-        # ---------------------------------
-        patches = extract_patches(
-        image,
-        patch_size=patch_size
-        )
-        scaler = StandardScaler()
-        patches_scaled = scaler.fit_transform(
-        patches
-        )
-
-        # ---------------------------------
-        # PCA
-        # ---------------------------------
-
-        pca = PCA(
-            n_components=pca_components
-        )
-        reduced = pca.fit_transform(
-            patches_scaled
-        )
-
-        # ---------------------------------
-        # BUILD AE
-        # ---------------------------------
-
-        autoencoder, encoder = build_autoencoder(
-            reduced.shape[1],
-            latent_dim
-        )
-
-        # ---------------------------------
-        # PRETRAIN AE
-        # ---------------------------------
-        
-        with st.spinner("Pretraining Autoencoder..."):
-            
-            autoencoder.fit(
-            reduced,
-            reduced,
-            epochs=10,
-            batch_size=256,
-            verbose=0
-        )
-
-        # ---------------------------------
-        # INITIAL FEATURES
-        # ---------------------------------
-        features = encoder.predict(
-            reduced,
-            batch_size=256
-            )
-
-        # ---------------------------------
-        # INITIAL KMEANS
-        # ---------------------------------
-
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            n_init=10,
-            random_state=42
-            )
-
-        labels = kmeans.fit_predict(
-            features
-            )
-        cluster_centers = kmeans.cluster_centers_
-
-        # ---------------------------------
-        # DEC REFINEMENT
-        # ---------------------------------
-
-        optimizer = Adam(0.0001)
-        for ite in range(20):
-            
-            with tf.GradientTape() as tape:
-                z = encoder(
-                    reduced,
-                    training=True
-                )
-
-                z_np = z.numpy()
-
-                q = soft_assign(
-                    z_np,
-                    cluster_centers
-                )
-
-                p = target_distribution(q)
-
-                q_tf = tf.convert_to_tensor(
-                    q,
-                    dtype=tf.float32
-                )
-
-                p_tf = tf.convert_to_tensor(
-                    p,
-                    dtype=tf.float32
-                )
-
-                loss = tf.keras.losses.KLDivergence()(
-                    p_tf,
-                    q_tf
-                )
-
-            grads = tape.gradient(
-                loss,
-                encoder.trainable_weights
-                )
-
-            optimizer.apply_gradients(
-                zip(
-                    grads,
-                    encoder.trainable_weights
-                )
-            )
-
-        # ---------------------------------
-        # FINAL FEATURES
-        # ---------------------------------
-
-        final_features = encoder.predict(
-            reduced,
-            batch_size=256
-        )
-
-        # ---------------------------------
-        # FINAL CLUSTERING
-        # ---------------------------------
-
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            random_state=42,
-            n_init=10
-            )
-
-        labels = kmeans.fit_predict(
-            final_features
-        )
-        
-        
-        
-        
-
-    # PCA visualization
-if method != "KMeans":
-
-    st.subheader("PCA Visualization")
-
-    pca_vis = reduced[:, :3]
-
-    pca_vis = (
-        pca_vis - pca_vis.min()
-    ) / (
-        pca_vis.max() - pca_vis.min()
+    pixels_scaled = scaler.fit_transform(
+        pixels
     )
 
-    pca_vis = pca_vis.reshape(h, w, 3)
-
-    fig2, ax2 = plt.subplots(figsize=(6,6))
-
-    ax2.imshow(pca_vis)
-    ax2.set_title("PCA Image")
-    ax2.axis("off")
-
-    st.pyplot(fig2)
-
     # =====================================
-    # CLUSTER MAP
+    # SINGLE METHOD MODE
     # =====================================
 
-    cluster_map = labels.reshape(h, w)
+    if mode == "Single Method":
+
+        # =================================
+        # KMEANS
+        # =================================
+
+        if method == "KMeans":
+
+            labels = run_kmeans(
+                pixels_scaled,
+                n_clusters
+            )
+
+        # =================================
+        # PCA + KMEANS
+        # =================================
+
+        elif method == "PCA + KMeans":
+
+            labels, reduced = run_pca_kmeans(
+                pixels_scaled,
+                n_clusters,
+                pca_components
+            )
+
+        # =================================
+        # SPATIAL
+        # =================================
+
+        elif method == "Spatial-Spectral":
+
+            labels, reduced = run_spatial(
+                image,
+                patch_size,
+                pca_components,
+                n_clusters
+            )
+
+        # =================================
+        # AUTOENCODER
+        # =================================
+
+        elif method == "Autoencoder":
+
+            labels, reduced = run_autoencoder(
+                image,
+                patch_size,
+                pca_components,
+                latent_dim,
+                n_clusters
+            )
+
+        # =================================
+        # DEC
+        # =================================
+
+        elif method == "DEC":
+
+            labels, reduced = run_dec(
+                image,
+                patch_size,
+                pca_components,
+                latent_dim,
+                n_clusters
+            )
+
+        # =================================
+        # PCA VISUALIZATION
+        # =================================
+
+        if method != "KMeans":
+
+            st.subheader("PCA Visualization")
+
+            pca_vis = reduced[:, :3]
+
+            pca_vis = (
+                pca_vis - pca_vis.min()
+            ) / (
+                pca_vis.max() - pca_vis.min()
+            )
+
+            pca_vis = pca_vis.reshape(
+                h,
+                w,
+                3
+            )
+
+            fig2, ax2 = plt.subplots(
+                figsize=(6,6)
+            )
+
+            ax2.imshow(pca_vis)
+
+            ax2.set_title(
+                "PCA Representation"
+            )
+
+            ax2.axis("off")
+
+            st.pyplot(fig2)
+
+        # =================================
+        # CLUSTER MAP
+        # =================================
+
+        cluster_map = labels.reshape(h, w)
+
+        st.subheader("Clustered Output")
+
+        fig3, ax3 = plt.subplots(
+            figsize=(6,6)
+        )
+
+        ax3.imshow(
+            cluster_map,
+            cmap="nipy_spectral"
+        )
+
+        ax3.set_title(
+            f"{method} Cluster Map"
+        )
+
+        ax3.axis("off")
+
+        st.pyplot(fig3)
+
+        # =================================
+        # METRICS
+        # =================================
+
+        if gt is not None:
+
+            st.subheader(
+                "Evaluation Metrics"
+            )
+
+            acc, kappa, nmi, cm = calculate_metrics(
+                gt,
+                labels
+            )
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                "Accuracy",
+                f"{acc:.4f}"
+            )
+
+            col2.metric(
+                "Kappa",
+                f"{kappa:.4f}"
+            )
+
+            col3.metric(
+                "NMI",
+                f"{nmi:.4f}"
+            )
+
+            # =============================
+            # CONFUSION MATRIX
+            # =============================
+
+            st.subheader(
+                "Confusion Matrix"
+            )
+
+            fig_cm, ax_cm = plt.subplots(
+                figsize=(8,6)
+            )
+
+            ax_cm.imshow(cm)
+
+            ax_cm.set_title(
+                "Confusion Matrix"
+            )
+
+            ax_cm.set_xlabel(
+                "Predicted"
+            )
+
+            ax_cm.set_ylabel(
+                "True"
+            )
+
+            st.pyplot(fig_cm)
+
+            # =============================
+            # CLASS ACCURACY
+            # =============================
+
+            st.subheader(
+                "Class-wise Accuracy"
+            )
+
+            class_acc = (
+                cm.diagonal() /
+                cm.sum(axis=1)
+            )
+
+            fig_acc, ax_acc = plt.subplots(
+                figsize=(8,4)
+            )
+
+            ax_acc.bar(
+                range(len(class_acc)),
+                class_acc
+            )
+
+            ax_acc.set_title(
+                "Class-wise Accuracy"
+            )
+
+            ax_acc.set_xlabel(
+                "Class"
+            )
+
+            ax_acc.set_ylabel(
+                "Accuracy"
+            )
+
+            st.pyplot(fig_acc)
 
     # =====================================
-    # DISPLAY RESULTS
+    # COMPARE METHODS MODE
     # =====================================
 
-    st.subheader("Clustered Output")
+    else:
 
-    fig3, ax3 = plt.subplots(figsize=(6,6))
+        st.subheader(
+            "Method Comparison Dashboard"
+        )
 
-    ax3.imshow(cluster_map, cmap="nipy_spectral")
-    ax3.set_title("Cluster Map")
-    ax3.axis("off")
+        results = {}
 
-    st.pyplot(fig3)
+        # =================================
+        # LOOP THROUGH METHODS
+        # =================================
 
-    # =====================================
-    # CLUSTER DISTRIBUTION
-    # =====================================
+        for current_method in compare_methods:
 
-    st.subheader("Cluster Distribution")
+            st.write(
+                f"Running: {current_method}"
+            )
 
-    unique, counts = np.unique(labels, return_counts=True)
+            # =============================
+            # KMEANS
+            # =============================
 
-    for u, c in zip(unique, counts):
+            if current_method == "KMeans":
 
-        st.write(f"Cluster {u}: {c} pixels")
+                labels = run_kmeans(
+                    pixels_scaled,
+                    n_clusters
+                )
+
+            # =============================
+            # PCA + KMEANS
+            # =============================
+
+            elif current_method == "PCA + KMeans":
+
+                labels, reduced = run_pca_kmeans(
+                    pixels_scaled,
+                    n_clusters,
+                    pca_components
+                )
+
+            # =============================
+            # SPATIAL
+            # =============================
+
+            elif current_method == "Spatial-Spectral":
+
+                labels, reduced = run_spatial(
+                    image,
+                    patch_size,
+                    pca_components,
+                    n_clusters
+                )
+
+            # =============================
+            # AE
+            # =============================
+
+            elif current_method == "Autoencoder":
+
+                labels, reduced = run_autoencoder(
+                    image,
+                    patch_size,
+                    pca_components,
+                    latent_dim,
+                    n_clusters
+                )
+
+            # =============================
+            # DEC
+            # =============================
+
+            elif current_method == "DEC":
+
+                labels, reduced = run_dec(
+                    image,
+                    patch_size,
+                    pca_components,
+                    latent_dim,
+                    n_clusters
+                )
+
+            # =============================
+            # CLUSTER MAP
+            # =============================
+
+            cluster_map = labels.reshape(h, w)
+
+            fig_compare, ax_compare = plt.subplots(
+                figsize=(5,5)
+            )
+
+            ax_compare.imshow(
+                cluster_map,
+                cmap="nipy_spectral"
+            )
+
+            ax_compare.set_title(
+                current_method
+            )
+
+            ax_compare.axis("off")
+
+            st.pyplot(fig_compare)
+
+            # =============================
+            # METRICS
+            # =============================
+
+            if gt is not None:
+
+                acc, kappa, nmi, cm = calculate_metrics(
+                    gt,
+                    labels
+                )
+
+                results[current_method] = {
+                    "Accuracy": acc,
+                    "Kappa": kappa,
+                    "NMI": nmi
+                }
+
+        # =================================
+        # RESULTS TABLE
+        # =================================
+
+        if gt is not None and len(results) > 0:
+
+            st.subheader(
+                "Comparison Table"
+            )
+
+            st.dataframe(results)
+
+            # =============================
+            # COMPARISON GRAPH
+            # =============================
+
+            methods = list(results.keys())
+
+            accuracy_vals = [
+                results[m]["Accuracy"]
+                for m in methods
+            ]
+
+            kappa_vals = [
+                results[m]["Kappa"]
+                for m in methods
+            ]
+
+            nmi_vals = [
+                results[m]["NMI"]
+                for m in methods
+            ]
+
+            x = np.arange(len(methods))
+
+            width = 0.25
+
+            fig_bar, ax_bar = plt.subplots(
+                figsize=(10,5)
+            )
+
+            ax_bar.bar(
+                x - width,
+                accuracy_vals,
+                width,
+                label="Accuracy"
+            )
+
+            ax_bar.bar(
+                x,
+                kappa_vals,
+                width,
+                label="Kappa"
+            )
+
+            ax_bar.bar(
+                x + width,
+                nmi_vals,
+                width,
+                label="NMI"
+            )
+
+            ax_bar.set_xticks(x)
+
+            ax_bar.set_xticklabels(
+                methods
+            )
+
+            ax_bar.set_title(
+                "Method Comparison"
+            )
+
+            ax_bar.legend()
+
+            st.pyplot(fig_bar)
 
 # =========================================
 # FOOTER
 # =========================================
 
 st.markdown("---")
-st.markdown("HyperClusterAI © Intelligent Spatial-Spectral Segmentation System")
+
+st.markdown(
+    "HyperClusterAI © Universal Spatial-Spectral Intelligent Segmentation System"
+)
