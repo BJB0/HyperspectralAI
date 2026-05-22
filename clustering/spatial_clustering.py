@@ -1,7 +1,7 @@
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 
-from clustering.kmeans import run_kmeans
+from clustering.kmeans_clustering import run_kmeans
 
 from utils.patches import extract_patches
 

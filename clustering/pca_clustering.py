@@ -1,6 +1,6 @@
 from sklearn.decomposition import PCA
 
-from clustering.kmeans import run_kmeans
+from clustering.kmeans_clustering import run_kmeans
 
 
 def run_pca_kmeans(
