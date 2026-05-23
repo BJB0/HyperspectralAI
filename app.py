@@ -4,6 +4,8 @@
 # =========================================
 
 import io
+import os
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +14,11 @@ import streamlit as st
 from PIL import Image
 from scipy.io import loadmat
 from sklearn.preprocessing import StandardScaler
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from clustering.autoencoder_clustering import run_autoencoder
 from clustering.dec_clustering import run_dec
@@ -146,14 +153,56 @@ def run_selected_method(
 
 st.set_page_config(page_title="HyperClusterAI", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    .main {
+        background-color: #0E1117;
+    }
+
+    h1, h2, h3 {
+        color: #4CAF50;
+    }
+
+    .stButton > button {
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("HyperClusterAI")
 st.subheader("Universal Spatial-Spectral Intelligent Segmentation System")
+
+# =====================================
+# DASHBOARD TABS
+# =====================================
+
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    [
+        "🖼 Original Image",
+        "🌈 PCA View",
+        "🧩 Cluster Results",
+        "📊 Metrics",
+        "📈 Comparison",
+        "💾 Exports",
+        "⚡ Performance",
+    ]
+)
 
 
 # =========================================
 # SIDEBAR
 # =========================================
 
+st.sidebar.image(
+    "https://cdn-icons-png.flaticon.com/512/2909/2909763.png",
+    width=120,
+)
+st.sidebar.title("HyperClusterAI")
 st.sidebar.header("Settings")
 
 mode = st.sidebar.radio(
@@ -187,6 +236,22 @@ latent_dim = st.sidebar.slider("Latent Dimension", 2, 50, 10)
 pca_components = st.sidebar.slider("PCA Components", 2, 50, 10)
 run_button = st.sidebar.button("Run Clustering")
 
+st.sidebar.markdown("---")
+st.sidebar.info(
+    """
+    HyperClusterAI
+
+    Universal Spatial-Spectral
+    Deep Clustering Platform
+
+    Built for:
+    - RGB Images
+    - Hyperspectral Images
+    - Research
+    - Intelligent Segmentation
+    """
+)
+
 
 # =========================================
 # FILE UPLOAD
@@ -207,8 +272,12 @@ gt_file = st.file_uploader(
 # MAIN PIPELINE
 # =========================================
 
+start_time = time.time()
+
 if uploaded_file is not None and run_button:
     file_name = uploaded_file.name.lower()
+    process = psutil.Process(os.getpid()) if psutil is not None else None
+    memory_before = process.memory_info().rss / 1024**2 if process is not None else None
 
     if file_name.endswith(("jpg", "png", "jpeg")):
         image = np.array(Image.open(uploaded_file))
@@ -241,17 +310,52 @@ if uploaded_file is not None and run_button:
 
     h, w, c = image.shape
 
+    # =====================================
+    # AI RECOMMENDATION ENGINE
+    # =====================================
+
+    st.subheader("Intelligent Analysis")
+
+    recommendations = []
+
+    if image_type == "HSI":
+        recommendations.append("Hyperspectral image detected.")
+        recommendations.append("Recommended Method: DEC or Autoencoder.")
+        recommendations.append("Spatial-spectral learning is highly beneficial for HSI.")
+
+        if c > 100:
+            recommendations.append("High spectral dimensionality detected.")
+            recommendations.append("Recommended PCA Components: 10-30.")
+
+    elif image_type == "RGB":
+        recommendations.append("RGB image detected.")
+        recommendations.append("Recommended Method: PCA + KMeans.")
+        recommendations.append("Deep clustering may improve texture-based segmentation.")
+
+    if h * w > 300000:
+        recommendations.append("Large image detected.")
+        recommendations.append("Use smaller patch sizes for faster computation.")
+        recommendations.append("KMeans or PCA + KMeans recommended for efficiency.")
+
+    if patch_size >= 7:
+        recommendations.append("Large patch size selected.")
+        recommendations.append("May increase memory usage and processing time.")
+
+    for recommendation in recommendations:
+        st.info(recommendation)
+
     if h * w > 300000:
         st.warning("Large image detected. Processing may be slow.")
 
-    st.subheader("Original Image")
+    with tab1:
+        st.subheader("Original Image")
 
-    display_image = make_rgb_preview(image, image_type)
-    fig1, ax1 = plt.subplots(figsize=(6, 6))
-    ax1.imshow(display_image)
-    ax1.set_title("Input Image")
-    ax1.axis("off")
-    st.pyplot(fig1)
+        display_image = make_rgb_preview(image, image_type)
+        fig1, ax1 = plt.subplots(figsize=(6, 6))
+        ax1.imshow(display_image)
+        ax1.set_title("Input Image")
+        ax1.axis("off")
+        st.pyplot(fig1)
 
     pixels = image.reshape(-1, c)
     scaler = StandardScaler()
@@ -269,101 +373,111 @@ if uploaded_file is not None and run_button:
         )
 
         if reduced is not None:
-            st.subheader("PCA Visualization")
+            with tab2:
+                st.subheader("PCA Visualization")
 
-            pca_vis = make_pca_preview(reduced, h, w)
-            fig2, ax2 = plt.subplots(figsize=(6, 6))
-            ax2.imshow(pca_vis)
-            ax2.set_title("PCA Representation")
-            ax2.axis("off")
-            st.pyplot(fig2)
+                pca_vis = make_pca_preview(reduced, h, w)
+                fig2, ax2 = plt.subplots(figsize=(6, 6))
+                ax2.imshow(pca_vis)
+                ax2.set_title("PCA Representation")
+                ax2.axis("off")
+                st.pyplot(fig2)
+        else:
+            with tab2:
+                st.info("PCA visualization is available for methods that return reduced features.")
 
         cluster_map = labels.reshape(h, w)
 
-        st.subheader("Clustered Output")
+        with tab3:
+            st.subheader("Clustered Output")
 
-        fig3, ax3 = plt.subplots(figsize=(6, 6))
-        ax3.imshow(cluster_map, cmap="nipy_spectral")
-        ax3.set_title(f"{method} Cluster Map")
-        ax3.axis("off")
-        st.pyplot(fig3)
+            fig3, ax3 = plt.subplots(figsize=(6, 6))
+            ax3.imshow(cluster_map, cmap="nipy_spectral")
+            ax3.set_title(f"{method} Cluster Map")
+            ax3.axis("off")
+            st.pyplot(fig3)
 
         metrics = None
         fig_cm = None
         fig_acc = None
 
         if gt is not None:
-            st.subheader("Evaluation Metrics")
+            with tab4:
+                st.subheader("Evaluation Metrics")
 
-            acc, kappa, nmi, cm = calculate_metrics(gt, labels)
-            metrics = {
-                "Accuracy": acc,
-                "Kappa": kappa,
-                "NMI": nmi,
-            }
+                acc, kappa, nmi, cm = calculate_metrics(gt, labels)
+                metrics = {
+                    "Accuracy": acc,
+                    "Kappa": kappa,
+                    "NMI": nmi,
+                }
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Accuracy", f"{acc:.4f}")
-            col2.metric("Kappa", f"{kappa:.4f}")
-            col3.metric("NMI", f"{nmi:.4f}")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Accuracy", f"{acc:.4f}")
+                col2.metric("Kappa", f"{kappa:.4f}")
+                col3.metric("NMI", f"{nmi:.4f}")
 
-            st.subheader("Confusion Matrix")
+                st.subheader("Confusion Matrix")
 
-            fig_cm, ax_cm = plt.subplots(figsize=(8, 6))
-            ax_cm.imshow(cm)
-            ax_cm.set_title("Confusion Matrix")
-            ax_cm.set_xlabel("Predicted")
-            ax_cm.set_ylabel("True")
-            st.pyplot(fig_cm)
+                fig_cm, ax_cm = plt.subplots(figsize=(8, 6))
+                ax_cm.imshow(cm)
+                ax_cm.set_title("Confusion Matrix")
+                ax_cm.set_xlabel("Predicted")
+                ax_cm.set_ylabel("True")
+                st.pyplot(fig_cm)
 
-            st.subheader("Class-wise Accuracy")
+                st.subheader("Class-wise Accuracy")
 
-            class_acc = np.divide(
-                cm.diagonal(),
-                cm.sum(axis=1),
-                out=np.zeros_like(cm.diagonal(), dtype=float),
-                where=cm.sum(axis=1) != 0,
-            )
+                class_acc = np.divide(
+                    cm.diagonal(),
+                    cm.sum(axis=1),
+                    out=np.zeros_like(cm.diagonal(), dtype=float),
+                    where=cm.sum(axis=1) != 0,
+                )
 
-            fig_acc, ax_acc = plt.subplots(figsize=(8, 4))
-            ax_acc.bar(range(len(class_acc)), class_acc)
-            ax_acc.set_title("Class-wise Accuracy")
-            ax_acc.set_xlabel("Class")
-            ax_acc.set_ylabel("Accuracy")
-            st.pyplot(fig_acc)
+                fig_acc, ax_acc = plt.subplots(figsize=(8, 4))
+                ax_acc.bar(range(len(class_acc)), class_acc)
+                ax_acc.set_title("Class-wise Accuracy")
+                ax_acc.set_xlabel("Class")
+                ax_acc.set_ylabel("Accuracy")
+                st.pyplot(fig_acc)
+        else:
+            with tab4:
+                st.info("Upload ground truth to enable evaluation metrics.")
 
-        st.download_button(
-            label="Download Cluster Map PNG",
-            data=fig_to_png(fig3),
-            file_name=f"{method}_cluster_map.png",
-            mime="image/png",
-        )
-
-        if metrics is not None:
-            csv_data = create_metrics_csv({method: metrics})
-
+        with tab6:
             st.download_button(
-                label="Download Metrics CSV",
-                data=csv_data,
-                file_name=f"{method}_metrics.csv",
-                mime="text/csv",
-            )
-
-            st.download_button(
-                label="Download Confusion Matrix PNG",
-                data=fig_to_png(fig_cm),
-                file_name=f"{method}_confusion_matrix.png",
+                label="Download Cluster Map PNG",
+                data=fig_to_png(fig3),
+                file_name=f"{method}_cluster_map.png",
                 mime="image/png",
             )
 
-            st.download_button(
-                label="Download Class Accuracy Graph",
-                data=fig_to_png(fig_acc),
-                file_name=f"{method}_class_accuracy.png",
-                mime="image/png",
-            )
+            if metrics is not None:
+                csv_data = create_metrics_csv({method: metrics})
 
-            report_text = f"""
+                st.download_button(
+                    label="Download Metrics CSV",
+                    data=csv_data,
+                    file_name=f"{method}_metrics.csv",
+                    mime="text/csv",
+                )
+
+                st.download_button(
+                    label="Download Confusion Matrix PNG",
+                    data=fig_to_png(fig_cm),
+                    file_name=f"{method}_confusion_matrix.png",
+                    mime="image/png",
+                )
+
+                st.download_button(
+                    label="Download Class Accuracy Graph",
+                    data=fig_to_png(fig_acc),
+                    file_name=f"{method}_class_accuracy.png",
+                    mime="image/png",
+                )
+
+                report_text = f"""
 HyperClusterAI Report Summary
 ====================================
 
@@ -402,90 +516,83 @@ Higher NMI indicates stronger clustering consistency. Kappa reflects
 agreement beyond chance.
 """
 
-            st.download_button(
-                label="Download Report Summary",
-                data=report_text,
-                file_name=f"{method}_report.txt",
-                mime="text/plain",
-            )
+                st.download_button(
+                    label="Download Report Summary",
+                    data=report_text,
+                    file_name=f"{method}_report.txt",
+                    mime="text/plain",
+                )
+            else:
+                st.info("Upload ground truth to enable metrics exports and report downloads.")
 
     else:
-        st.subheader("Method Comparison Dashboard")
-
         if not compare_methods:
-            st.warning("Select at least one method to compare.")
+            with tab5:
+                st.warning("Select at least one method to compare.")
             st.stop()
 
         results = {}
         fig_bar = None
 
-        for current_method in compare_methods:
-            st.write(f"Running: {current_method}")
+        with tab5:
+            st.subheader("Method Comparison Dashboard")
 
-            labels, _ = run_selected_method(
-                current_method,
-                image,
-                pixels_scaled,
-                n_clusters,
-                patch_size,
-                pca_components,
-                latent_dim,
-            )
+            for current_method in compare_methods:
+                st.write(f"Running: {current_method}")
 
-            cluster_map = labels.reshape(h, w)
+                labels, _ = run_selected_method(
+                    current_method,
+                    image,
+                    pixels_scaled,
+                    n_clusters,
+                    patch_size,
+                    pca_components,
+                    latent_dim,
+                )
 
-            fig_compare, ax_compare = plt.subplots(figsize=(5, 5))
-            ax_compare.imshow(cluster_map, cmap="nipy_spectral")
-            ax_compare.set_title(current_method)
-            ax_compare.axis("off")
-            st.pyplot(fig_compare)
+                cluster_map = labels.reshape(h, w)
 
-            if gt is not None:
-                acc, kappa, nmi, _ = calculate_metrics(gt, labels)
-                results[current_method] = {
-                    "Accuracy": acc,
-                    "Kappa": kappa,
-                    "NMI": nmi,
-                }
+                fig_compare, ax_compare = plt.subplots(figsize=(5, 5))
+                ax_compare.imshow(cluster_map, cmap="nipy_spectral")
+                ax_compare.set_title(current_method)
+                ax_compare.axis("off")
+                st.pyplot(fig_compare)
+
+                if gt is not None:
+                    acc, kappa, nmi, _ = calculate_metrics(gt, labels)
+                    results[current_method] = {
+                        "Accuracy": acc,
+                        "Kappa": kappa,
+                        "NMI": nmi,
+                    }
+
+            if gt is not None and results:
+                st.subheader("Comparison Table")
+
+                results_df = pd.DataFrame(results).T
+                st.dataframe(results_df)
+
+                methods = list(results.keys())
+                accuracy_vals = [results[m]["Accuracy"] for m in methods]
+                kappa_vals = [results[m]["Kappa"] for m in methods]
+                nmi_vals = [results[m]["NMI"] for m in methods]
+
+                x = np.arange(len(methods))
+                width = 0.25
+
+                fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
+                ax_bar.bar(x - width, accuracy_vals, width, label="Accuracy")
+                ax_bar.bar(x, kappa_vals, width, label="Kappa")
+                ax_bar.bar(x + width, nmi_vals, width, label="NMI")
+                ax_bar.set_xticks(x)
+                ax_bar.set_xticklabels(methods)
+                ax_bar.set_title("Method Comparison")
+                ax_bar.legend()
+                st.pyplot(fig_bar)
+            elif gt is None:
+                st.info("Upload ground truth to enable comparison metrics and reports.")
 
         if gt is not None and results:
-            st.subheader("Comparison Table")
-
-            results_df = pd.DataFrame(results).T
-            st.dataframe(results_df)
-
-            methods = list(results.keys())
-            accuracy_vals = [results[m]["Accuracy"] for m in methods]
-            kappa_vals = [results[m]["Kappa"] for m in methods]
-            nmi_vals = [results[m]["NMI"] for m in methods]
-
-            x = np.arange(len(methods))
-            width = 0.25
-
-            fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
-            ax_bar.bar(x - width, accuracy_vals, width, label="Accuracy")
-            ax_bar.bar(x, kappa_vals, width, label="Kappa")
-            ax_bar.bar(x + width, nmi_vals, width, label="NMI")
-            ax_bar.set_xticks(x)
-            ax_bar.set_xticklabels(methods)
-            ax_bar.set_title("Method Comparison")
-            ax_bar.legend()
-            st.pyplot(fig_bar)
-
-            st.download_button(
-                label="Download Comparison Graph",
-                data=fig_to_png(fig_bar),
-                file_name="comparison_graph.png",
-                mime="image/png",
-            )
-
-            st.download_button(
-                label="Download Comparison Table CSV",
-                data=create_metrics_csv(results),
-                file_name="comparison_metrics.csv",
-                mime="text/csv",
-            )
-
             best_method = max(results, key=lambda x: results[x]["NMI"])
 
             comparison_report = f"""
@@ -521,14 +628,82 @@ Final Observation
 {best_method} achieved the highest NMI score among the compared methods.
 """
 
-            st.download_button(
-                label="Download Comparison Report",
-                data=comparison_report,
-                file_name="comparison_report.txt",
-                mime="text/plain",
-            )
+            with tab6:
+                st.download_button(
+                    label="Download Comparison Graph",
+                    data=fig_to_png(fig_bar),
+                    file_name="comparison_graph.png",
+                    mime="image/png",
+                )
+
+                st.download_button(
+                    label="Download Comparison Table CSV",
+                    data=create_metrics_csv(results),
+                    file_name="comparison_metrics.csv",
+                    mime="text/csv",
+                )
+
+                st.download_button(
+                    label="Download Comparison Report",
+                    data=comparison_report,
+                    file_name="comparison_report.txt",
+                    mime="text/plain",
+                )
         elif gt is None:
-            st.info("Upload ground truth to enable comparison metrics and reports.")
+            with tab6:
+                st.info("Upload ground truth to enable comparison exports.")
+
+    # =====================================
+    # PERFORMANCE DASHBOARD
+    # =====================================
+
+    end_time = time.time()
+    runtime = end_time - start_time
+    memory_after = process.memory_info().rss / 1024**2 if process is not None else None
+    memory_used = (
+        memory_after - memory_before
+        if memory_after is not None and memory_before is not None
+        else None
+    )
+    memory_display = f"{memory_used:.2f}" if memory_used is not None else "Install psutil"
+
+    complexity = {
+        "KMeans": "Low",
+        "PCA + KMeans": "Low-Medium",
+        "Spatial-Spectral": "Medium",
+        "Autoencoder": "High",
+        "DEC": "Very High",
+    }
+
+    if mode == "Single Method":
+        processing_mode = "Deep Clustering" if method in {"Autoencoder", "DEC"} else "Classical Clustering"
+        method_complexity = complexity.get(method, "Unknown")
+    else:
+        deep_methods = {"Autoencoder", "DEC"}
+        processing_mode = (
+            "Hybrid Comparison"
+            if any(selected_method in deep_methods for selected_method in compare_methods)
+            else "Classical Comparison"
+        )
+        method_complexity = ", ".join(
+            f"{selected_method}: {complexity.get(selected_method, 'Unknown')}"
+            for selected_method in compare_methods
+        )
+
+    with tab7:
+        st.subheader("Performance Dashboard")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Runtime (sec)", f"{runtime:.2f}")
+        col2.metric("Memory Usage (MB)", memory_display)
+        col3.metric("Image Size", f"{h} x {w}")
+
+        col4, col5, col6 = st.columns(3)
+        col4.metric("Processing Mode", processing_mode)
+        col5.metric("Method Complexity", method_complexity)
+        col6.metric("Dataset Type", image_type)
+
+        st.info(f"Estimated Computational Complexity: {method_complexity}")
 
 
 # =========================================
