@@ -20,6 +20,11 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
+
 from clustering.autoencoder_clustering import run_autoencoder
 from clustering.dec_clustering import run_dec
 from clustering.kmeans_clustering import run_kmeans
@@ -107,6 +112,109 @@ def make_pca_preview(reduced, height, width):
     return preview.reshape(height, width, 3)
 
 
+METHOD_INFO = {
+    "KMeans": {
+        "Best For": "Fast baseline segmentation",
+        "Strength": "Simple, quick, and easy to compare",
+        "Limitation": "Uses spectral values without spatial context",
+        "Runtime": "Fast",
+    },
+    "PCA + KMeans": {
+        "Best For": "High-dimensional RGB/HSI data",
+        "Strength": "Reduces spectral noise and dimensionality",
+        "Limitation": "Linear reduction may miss nonlinear patterns",
+        "Runtime": "Fast",
+    },
+    "Spatial-Spectral": {
+        "Best For": "Context-aware segmentation",
+        "Strength": "Uses neighboring pixels through patch features",
+        "Limitation": "Patch extraction increases memory use",
+        "Runtime": "Medium",
+    },
+    "Autoencoder": {
+        "Best For": "Nonlinear feature learning",
+        "Strength": "Learns compact latent representations",
+        "Limitation": "Retrains per input image and needs more time",
+        "Runtime": "Slow",
+    },
+    "DEC": {
+        "Best For": "Research-style deep clustering",
+        "Strength": "Refines latent clusters with target distribution learning",
+        "Limitation": "Most computationally expensive method",
+        "Runtime": "Slowest",
+    },
+}
+
+
+METHOD_PIPELINES = {
+    "KMeans": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Pixel flattening",
+        "Standard scaling",
+        "KMeans clustering",
+        "Cluster map",
+    ],
+    "PCA + KMeans": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Pixel flattening",
+        "Standard scaling",
+        "PCA reduction",
+        "KMeans clustering",
+        "Cluster map",
+    ],
+    "Spatial-Spectral": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Patch extraction",
+        "Patch scaling",
+        "PCA reduction",
+        "KMeans clustering",
+        "Cluster map",
+    ],
+    "Autoencoder": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Patch extraction",
+        "Patch scaling",
+        "PCA reduction",
+        "Dense autoencoder training",
+        "Latent embedding",
+        "KMeans clustering",
+        "Cluster map",
+    ],
+    "DEC": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Patch extraction",
+        "Patch scaling",
+        "PCA reduction",
+        "Dense autoencoder pretraining",
+        "Latent embedding",
+        "DEC refinement",
+        "Final KMeans clustering",
+        "Cluster map",
+    ],
+}
+
+
+def get_compute_backend():
+    if tf is None:
+        return "TensorFlow unavailable"
+
+    gpus = tf.config.list_physical_devices("GPU")
+
+    if gpus:
+        return f"GPU ({len(gpus)} detected)"
+
+    return "CPU"
+
+
+def format_pipeline(method_name):
+    return " -> ".join(METHOD_PIPELINES[method_name])
+
+
 def run_selected_method(
     method_name,
     image,
@@ -183,13 +291,13 @@ st.subheader("Universal Spatial-Spectral Intelligent Segmentation System")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
     [
-        "🖼 Original Image",
-        "🌈 PCA View",
-        "🧩 Cluster Results",
-        "📊 Metrics",
-        "📈 Comparison",
-        "💾 Exports",
-        "⚡ Performance",
+        "Original Image",
+        "PCA View",
+        "Cluster Results",
+        "Metrics",
+        "Comparison",
+        "Exports",
+        "Performance",
     ]
 )
 
@@ -203,6 +311,19 @@ st.sidebar.image(
     width=120,
 )
 st.sidebar.title("HyperClusterAI")
+st.sidebar.markdown(
+    """
+    **Workflow**
+
+    1. Upload data
+    2. Select method
+    3. Configure parameters
+    4. Run clustering
+    5. Analyze results
+    6. Export outputs
+    """
+)
+st.sidebar.markdown("---")
 st.sidebar.header("Settings")
 
 mode = st.sidebar.radio(
@@ -237,6 +358,8 @@ pca_components = st.sidebar.slider("PCA Components", 2, 50, 10)
 run_button = st.sidebar.button("Run Clustering")
 
 st.sidebar.markdown("---")
+st.sidebar.metric("Compute Backend", get_compute_backend())
+st.sidebar.markdown("---")
 st.sidebar.info(
     """
     HyperClusterAI
@@ -251,6 +374,25 @@ st.sidebar.info(
     - Intelligent Segmentation
     """
 )
+
+
+# =========================================
+# METHOD GUIDE
+# =========================================
+
+st.subheader("Method Guide")
+st.dataframe(
+    pd.DataFrame(METHOD_INFO).T,
+    use_container_width=True,
+)
+
+if mode == "Single Method":
+    st.info(f"Selected pipeline: {format_pipeline(method)}")
+else:
+    selected_for_summary = compare_methods if compare_methods else method_options
+
+    for method_name in selected_for_summary:
+        st.info(f"{method_name}: {format_pipeline(method_name)}")
 
 
 # =========================================
@@ -315,6 +457,13 @@ if uploaded_file is not None and run_button:
     # =====================================
 
     st.subheader("Intelligent Analysis")
+    st.markdown("**Pipeline Summary**")
+
+    if mode == "Single Method":
+        st.info(format_pipeline(method))
+    else:
+        for method_name in compare_methods:
+            st.info(f"{method_name}: {format_pipeline(method_name)}")
 
     recommendations = []
 
@@ -703,6 +852,7 @@ Final Observation
         col5.metric("Method Complexity", method_complexity)
         col6.metric("Dataset Type", image_type)
 
+        st.metric("Compute Backend", get_compute_backend())
         st.info(f"Estimated Computational Complexity: {method_complexity}")
 
 
