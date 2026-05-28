@@ -219,4 +219,4 @@ def run_dec(
     # RETURN
     # =====================================
 
-    return final_labels, reduced
+    return final_labels, final_features

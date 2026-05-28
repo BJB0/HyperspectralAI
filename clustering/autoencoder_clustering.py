@@ -60,4 +60,4 @@ def run_autoencoder(
         n_clusters
     )
 
-    return labels, reduced
+    return labels, features

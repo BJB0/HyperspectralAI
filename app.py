@@ -4,6 +4,7 @@
 # =========================================
 
 import io
+import importlib.util
 import os
 import time
 
@@ -13,6 +14,8 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from scipy.io import loadmat
+from sklearn.metrics import silhouette_score
+from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 
 try:
@@ -20,13 +23,6 @@ try:
 except ImportError:
     psutil = None
 
-try:
-    import tensorflow as tf
-except ImportError:
-    tf = None
-
-from clustering.autoencoder_clustering import run_autoencoder
-from clustering.dec_clustering import run_dec
 from clustering.kmeans_clustering import run_kmeans
 from clustering.pca_clustering import run_pca_kmeans
 from clustering.spatial_clustering import run_spatial
@@ -112,7 +108,128 @@ def make_pca_preview(reduced, height, width):
     return preview.reshape(height, width, 3)
 
 
+def parse_band_indices(raw_indices, band_count):
+    indices = []
+
+    for item in raw_indices.split(","):
+        item = item.strip()
+
+        if item.isdigit():
+            indices.append(int(item))
+
+    if not indices:
+        indices = [min(10, band_count - 1), min(20, band_count - 1), min(30, band_count - 1)]
+
+    while len(indices) < 3:
+        indices.append(indices[-1])
+
+    return [max(0, min(index, band_count - 1)) for index in indices[:3]]
+
+
+def run_single_band_kmeans(image, band_index, n_clusters):
+    selected_band = image[:, :, band_index].reshape(-1, 1)
+    scaled = StandardScaler().fit_transform(selected_band)
+    labels = run_kmeans(scaled, n_clusters)
+
+    return labels, scaled
+
+
+def run_false_color_kmeans(image, band_indices, n_clusters):
+    false_color = image[:, :, band_indices].reshape(-1, len(band_indices))
+    scaled = StandardScaler().fit_transform(false_color)
+    labels = run_kmeans(scaled, n_clusters)
+
+    return labels, scaled
+
+
+def plot_spectral_signatures(image, cluster_map, max_clusters=8):
+    bands = np.arange(image.shape[2])
+    fig, ax = plt.subplots(figsize=(9, 4))
+
+    for cluster_id in np.unique(cluster_map)[:max_clusters]:
+        mask = cluster_map == cluster_id
+
+        if np.any(mask):
+            signature = image[mask].mean(axis=0)
+            ax.plot(bands, signature, label=f"Cluster {cluster_id}")
+
+    ax.set_title("Mean Spectral Signature by Cluster")
+    ax.set_xlabel("Band Index")
+    ax.set_ylabel("Mean Reflectance / Intensity")
+    ax.legend(loc="best", fontsize=8)
+
+    return fig
+
+
+def plot_tsne_features(features, labels, max_samples=2000):
+    if features is None or features.shape[1] < 2:
+        return None
+
+    sample_count = min(max_samples, features.shape[0])
+
+    if sample_count < 6:
+        return None
+
+    sample_indices = np.linspace(0, features.shape[0] - 1, sample_count, dtype=int)
+    sampled_features = features[sample_indices]
+    sampled_labels = labels[sample_indices]
+    perplexity = max(5, min(30, sample_count - 1))
+
+    embedding = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        init="pca",
+        learning_rate="auto",
+        random_state=42,
+    ).fit_transform(sampled_features)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    scatter = ax.scatter(
+        embedding[:, 0],
+        embedding[:, 1],
+        c=sampled_labels,
+        cmap="nipy_spectral",
+        s=8,
+        alpha=0.8,
+    )
+    ax.set_title("t-SNE Feature Space Visualization")
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
+    fig.colorbar(scatter, ax=ax, label="Cluster")
+
+    return fig
+
+
+def calculate_silhouette(features, labels, max_samples=3000):
+    if features is None or len(np.unique(labels)) < 2:
+        return None
+
+    sample_count = min(max_samples, features.shape[0])
+
+    if sample_count < 3:
+        return None
+
+    sample_indices = np.linspace(0, features.shape[0] - 1, sample_count, dtype=int)
+
+    return silhouette_score(
+        features[sample_indices],
+        labels[sample_indices],
+    )
+
+
 METHOD_INFO = {
+    "Single Band KMeans": {
+        "Best For": "Single-wavelength baseline",
+        "Strength": "Very fast and easy to interpret",
+        "Limitation": "Uses only one spectral band",
+        "Runtime": "Very fast",
+    },
+    "False Color KMeans": {
+        "Best For": "Three-band HSI visualization baseline",
+        "Strength": "Uses more spectral information than grayscale",
+        "Limitation": "Still discards most HSI bands",
+        "Runtime": "Fast",
+    },
     "KMeans": {
         "Best For": "Fast baseline segmentation",
         "Strength": "Simple, quick, and easy to compare",
@@ -137,6 +254,12 @@ METHOD_INFO = {
         "Limitation": "Retrains per input image and needs more time",
         "Runtime": "Slow",
     },
+    "CNN Autoencoder": {
+        "Best For": "Spatial-spectral deep feature learning",
+        "Strength": "Preserves local patch structure with convolutions",
+        "Limitation": "Slower and more memory intensive than dense AE",
+        "Runtime": "Very slow",
+    },
     "DEC": {
         "Best For": "Research-style deep clustering",
         "Strength": "Refines latent clusters with target distribution learning",
@@ -147,6 +270,22 @@ METHOD_INFO = {
 
 
 METHOD_PIPELINES = {
+    "Single Band KMeans": [
+        "Image upload",
+        "Band selection",
+        "Single-band feature vector",
+        "Standard scaling",
+        "KMeans clustering",
+        "Cluster map",
+    ],
+    "False Color KMeans": [
+        "Image upload",
+        "Three-band selection",
+        "False-color feature vector",
+        "Standard scaling",
+        "KMeans clustering",
+        "Cluster map",
+    ],
     "KMeans": [
         "Image upload",
         "RGB/HSI detection",
@@ -184,6 +323,17 @@ METHOD_PIPELINES = {
         "KMeans clustering",
         "Cluster map",
     ],
+    "CNN Autoencoder": [
+        "Image upload",
+        "RGB/HSI detection",
+        "Pixel scaling",
+        "PCA band reduction",
+        "Patch cube extraction",
+        "CNN autoencoder training",
+        "Latent embedding",
+        "KMeans clustering",
+        "Cluster map",
+    ],
     "DEC": [
         "Image upload",
         "RGB/HSI detection",
@@ -199,9 +349,21 @@ METHOD_PIPELINES = {
 }
 
 
-def get_compute_backend():
-    if tf is None:
+DEEP_METHODS = {"Autoencoder", "CNN Autoencoder", "DEC"}
+
+
+def tensorflow_available():
+    return importlib.util.find_spec("tensorflow") is not None
+
+
+def get_compute_backend(load_tensorflow=False):
+    if not tensorflow_available():
         return "TensorFlow unavailable"
+
+    if not load_tensorflow:
+        return "TensorFlow available"
+
+    import tensorflow as tf
 
     gpus = tf.config.list_physical_devices("GPU")
 
@@ -223,9 +385,17 @@ def run_selected_method(
     patch_size,
     pca_components,
     latent_dim,
+    single_band_index,
+    false_color_indices,
 ):
+    if method_name == "Single Band KMeans":
+        return run_single_band_kmeans(image, single_band_index, n_clusters)
+
+    if method_name == "False Color KMeans":
+        return run_false_color_kmeans(image, false_color_indices, n_clusters)
+
     if method_name == "KMeans":
-        return run_kmeans(pixels_scaled, n_clusters), None
+        return run_kmeans(pixels_scaled, n_clusters), pixels_scaled
 
     if method_name == "PCA + KMeans":
         return run_pca_kmeans(pixels_scaled, n_clusters, pca_components)
@@ -234,6 +404,8 @@ def run_selected_method(
         return run_spatial(image, patch_size, pca_components, n_clusters)
 
     if method_name == "Autoencoder":
+        from clustering.autoencoder_clustering import run_autoencoder
+
         return run_autoencoder(
             image,
             patch_size,
@@ -242,7 +414,20 @@ def run_selected_method(
             n_clusters,
         )
 
+    if method_name == "CNN Autoencoder":
+        from clustering.cnn_autoencoder_clustering import run_cnn_autoencoder
+
+        return run_cnn_autoencoder(
+            image,
+            patch_size,
+            pca_components,
+            latent_dim,
+            n_clusters,
+        )
+
     if method_name == "DEC":
+        from clustering.dec_clustering import run_dec
+
         return run_dec(
             image,
             patch_size,
@@ -289,13 +474,15 @@ st.subheader("Universal Spatial-Spectral Intelligent Segmentation System")
 # DASHBOARD TABS
 # =====================================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
     [
         "Original Image",
-        "PCA View",
+        "Feature View",
         "Cluster Results",
         "Metrics",
         "Comparison",
+        "Spectral Signatures",
+        "Latent Space",
         "Exports",
         "Performance",
     ]
@@ -335,30 +522,42 @@ mode = st.sidebar.radio(
 )
 
 method_options = [
+    "Single Band KMeans",
+    "False Color KMeans",
     "KMeans",
     "PCA + KMeans",
     "Spatial-Spectral",
     "Autoencoder",
+    "CNN Autoencoder",
     "DEC",
 ]
 
 if mode == "Single Method":
     method = st.sidebar.selectbox("Select Clustering Method", method_options)
+    selected_methods = [method]
 else:
     compare_methods = st.sidebar.multiselect(
         "Select Methods",
         method_options,
         default=["KMeans", "DEC"],
     )
+    selected_methods = compare_methods
 
 n_clusters = st.sidebar.slider("Number of Clusters", 2, 20, 5)
 patch_size = st.sidebar.slider("Patch Size", 3, 9, 3, step=2)
 latent_dim = st.sidebar.slider("Latent Dimension", 2, 50, 10)
 pca_components = st.sidebar.slider("PCA Components", 2, 50, 10)
+single_band_index = st.sidebar.number_input("Single Band Index", min_value=0, value=20)
+false_color_bands = st.sidebar.text_input("False Color Bands", value="20,50,100")
 run_button = st.sidebar.button("Run Clustering")
 
 st.sidebar.markdown("---")
-st.sidebar.metric("Compute Backend", get_compute_backend())
+deep_method_selected = any(selected_method in DEEP_METHODS for selected_method in selected_methods)
+st.sidebar.metric("Compute Backend", get_compute_backend(load_tensorflow=False))
+
+if deep_method_selected:
+    st.sidebar.caption("TensorFlow loads only when a deep method is run.")
+
 st.sidebar.markdown("---")
 st.sidebar.info(
     """
@@ -451,6 +650,8 @@ if uploaded_file is not None and run_button:
     st.write(f"Image Shape: {image.shape}")
 
     h, w, c = image.shape
+    selected_single_band = max(0, min(int(single_band_index), c - 1))
+    selected_false_color_bands = parse_band_indices(false_color_bands, c)
 
     # =====================================
     # AI RECOMMENDATION ENGINE
@@ -469,7 +670,7 @@ if uploaded_file is not None and run_button:
 
     if image_type == "HSI":
         recommendations.append("Hyperspectral image detected.")
-        recommendations.append("Recommended Method: DEC or Autoencoder.")
+        recommendations.append("Recommended Method: DEC, CNN Autoencoder, or Autoencoder.")
         recommendations.append("Spatial-spectral learning is highly beneficial for HSI.")
 
         if c > 100:
@@ -519,21 +720,23 @@ if uploaded_file is not None and run_button:
             patch_size,
             pca_components,
             latent_dim,
+            selected_single_band,
+            selected_false_color_bands,
         )
 
         if reduced is not None:
             with tab2:
-                st.subheader("PCA Visualization")
+                st.subheader("Feature Visualization")
 
                 pca_vis = make_pca_preview(reduced, h, w)
                 fig2, ax2 = plt.subplots(figsize=(6, 6))
                 ax2.imshow(pca_vis)
-                ax2.set_title("PCA Representation")
+                ax2.set_title("Feature Representation")
                 ax2.axis("off")
                 st.pyplot(fig2)
         else:
             with tab2:
-                st.info("PCA visualization is available for methods that return reduced features.")
+                st.info("Feature visualization is available for methods that return feature vectors.")
 
         cluster_map = labels.reshape(h, w)
 
@@ -546,9 +749,28 @@ if uploaded_file is not None and run_button:
             ax3.axis("off")
             st.pyplot(fig3)
 
+        with tab6:
+            st.subheader("Spectral Signature Curves")
+
+            if c > 1:
+                fig_signature = plot_spectral_signatures(image, cluster_map)
+                st.pyplot(fig_signature)
+            else:
+                st.info("Spectral signatures require at least two image bands.")
+
+        with tab7:
+            st.subheader("Latent / Feature Space Visualization")
+            fig_tsne = plot_tsne_features(reduced, labels)
+
+            if fig_tsne is not None:
+                st.pyplot(fig_tsne)
+            else:
+                st.info("t-SNE visualization requires at least two feature dimensions.")
+
         metrics = None
         fig_cm = None
         fig_acc = None
+        silhouette = calculate_silhouette(reduced, labels)
 
         if gt is not None:
             with tab4:
@@ -561,10 +783,17 @@ if uploaded_file is not None and run_button:
                     "NMI": nmi,
                 }
 
-                col1, col2, col3 = st.columns(3)
+                if silhouette is not None:
+                    metrics["Silhouette"] = silhouette
+
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Accuracy", f"{acc:.4f}")
                 col2.metric("Kappa", f"{kappa:.4f}")
                 col3.metric("NMI", f"{nmi:.4f}")
+                col4.metric(
+                    "Silhouette",
+                    f"{silhouette:.4f}" if silhouette is not None else "N/A",
+                )
 
                 st.subheader("Confusion Matrix")
 
@@ -592,9 +821,14 @@ if uploaded_file is not None and run_button:
                 st.pyplot(fig_acc)
         else:
             with tab4:
-                st.info("Upload ground truth to enable evaluation metrics.")
+                st.info("Upload ground truth to enable Accuracy, Kappa, and NMI.")
 
-        with tab6:
+                if silhouette is not None:
+                    st.metric("Silhouette Score", f"{silhouette:.4f}")
+                else:
+                    st.info("Silhouette Score could not be computed for this result.")
+
+        with tab8:
             st.download_button(
                 label="Download Cluster Map PNG",
                 data=fig_to_png(fig3),
@@ -654,6 +888,7 @@ Evaluation Metrics
 Accuracy: {metrics['Accuracy']:.4f}
 Kappa: {metrics['Kappa']:.4f}
 NMI: {metrics['NMI']:.4f}
+Silhouette: {f"{metrics['Silhouette']:.4f}" if 'Silhouette' in metrics else "N/A"}
 
 Observations
 ------------------------------------
@@ -689,7 +924,7 @@ agreement beyond chance.
             for current_method in compare_methods:
                 st.write(f"Running: {current_method}")
 
-                labels, _ = run_selected_method(
+                labels, features = run_selected_method(
                     current_method,
                     image,
                     pixels_scaled,
@@ -697,6 +932,8 @@ agreement beyond chance.
                     patch_size,
                     pca_components,
                     latent_dim,
+                    selected_single_band,
+                    selected_false_color_bands,
                 )
 
                 cluster_map = labels.reshape(h, w)
@@ -715,34 +952,50 @@ agreement beyond chance.
                         "NMI": nmi,
                     }
 
-            if gt is not None and results:
+                    silhouette = calculate_silhouette(features, labels)
+
+                    if silhouette is not None:
+                        results[current_method]["Silhouette"] = silhouette
+                else:
+                    silhouette = calculate_silhouette(features, labels)
+
+                    if silhouette is not None:
+                        results[current_method] = {
+                            "Silhouette": silhouette,
+                        }
+
+            if results:
                 st.subheader("Comparison Table")
 
                 results_df = pd.DataFrame(results).T
                 st.dataframe(results_df)
 
                 methods = list(results.keys())
-                accuracy_vals = [results[m]["Accuracy"] for m in methods]
-                kappa_vals = [results[m]["Kappa"] for m in methods]
-                nmi_vals = [results[m]["NMI"] for m in methods]
-
+                metric_names = list(results_df.columns)
                 x = np.arange(len(methods))
-                width = 0.25
+                width = 0.8 / max(len(metric_names), 1)
 
                 fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
-                ax_bar.bar(x - width, accuracy_vals, width, label="Accuracy")
-                ax_bar.bar(x, kappa_vals, width, label="Kappa")
-                ax_bar.bar(x + width, nmi_vals, width, label="NMI")
+
+                for metric_index, metric_name in enumerate(metric_names):
+                    offset = (metric_index - (len(metric_names) - 1) / 2) * width
+                    values = [results[m].get(metric_name, 0) for m in methods]
+                    ax_bar.bar(x + offset, values, width, label=metric_name)
+
                 ax_bar.set_xticks(x)
-                ax_bar.set_xticklabels(methods)
+                ax_bar.set_xticklabels(methods, rotation=20, ha="right")
                 ax_bar.set_title("Method Comparison")
                 ax_bar.legend()
                 st.pyplot(fig_bar)
-            elif gt is None:
-                st.info("Upload ground truth to enable comparison metrics and reports.")
 
-        if gt is not None and results:
-            best_method = max(results, key=lambda x: results[x]["NMI"])
+                if gt is None:
+                    st.info("Ground truth was not uploaded, so comparison uses Silhouette only.")
+            else:
+                st.info("Comparison metrics could not be computed for the selected methods.")
+
+        if results:
+            ranking_metric = "NMI" if gt is not None else "Silhouette"
+            best_method = max(results, key=lambda x: results[x].get(ranking_metric, -1))
 
             comparison_report = f"""
 HyperClusterAI Comparison Report
@@ -752,7 +1005,7 @@ Compared Methods:
 {methods}
 
 Best Performing Method:
-{best_method}
+{best_method} based on {ranking_metric}
 
 Detailed Results
 ------------------------------------
@@ -762,9 +1015,10 @@ Detailed Results
                 comparison_report += f"""
 Method: {method_name}
 
-Accuracy: {method_metrics['Accuracy']:.4f}
-Kappa: {method_metrics['Kappa']:.4f}
-NMI: {method_metrics['NMI']:.4f}
+Accuracy: {method_metrics.get('Accuracy', 'N/A')}
+Kappa: {method_metrics.get('Kappa', 'N/A')}
+NMI: {method_metrics.get('NMI', 'N/A')}
+Silhouette: {method_metrics.get('Silhouette', 'N/A')}
 
 ------------------------------------
 """
@@ -774,10 +1028,16 @@ NMI: {method_metrics['NMI']:.4f}
 Final Observation
 ====================================
 
-{best_method} achieved the highest NMI score among the compared methods.
+{best_method} achieved the highest {ranking_metric} score among the compared methods.
 """
 
             with tab6:
+                st.info("Spectral signature plots are available in Single Method mode.")
+
+            with tab7:
+                st.info("t-SNE latent-space visualization is available in Single Method mode.")
+
+            with tab8:
                 st.download_button(
                     label="Download Comparison Graph",
                     data=fig_to_png(fig_bar),
@@ -799,7 +1059,7 @@ Final Observation
                     mime="text/plain",
                 )
         elif gt is None:
-            with tab6:
+            with tab8:
                 st.info("Upload ground truth to enable comparison exports.")
 
     # =====================================
@@ -821,17 +1081,21 @@ Final Observation
         "PCA + KMeans": "Low-Medium",
         "Spatial-Spectral": "Medium",
         "Autoencoder": "High",
+        "CNN Autoencoder": "Very High",
         "DEC": "Very High",
     }
 
     if mode == "Single Method":
-        processing_mode = "Deep Clustering" if method in {"Autoencoder", "DEC"} else "Classical Clustering"
+        processing_mode = (
+            "Deep Clustering"
+            if method in DEEP_METHODS
+            else "Classical Clustering"
+        )
         method_complexity = complexity.get(method, "Unknown")
     else:
-        deep_methods = {"Autoencoder", "DEC"}
         processing_mode = (
             "Hybrid Comparison"
-            if any(selected_method in deep_methods for selected_method in compare_methods)
+            if any(selected_method in DEEP_METHODS for selected_method in compare_methods)
             else "Classical Comparison"
         )
         method_complexity = ", ".join(
@@ -839,7 +1103,7 @@ Final Observation
             for selected_method in compare_methods
         )
 
-    with tab7:
+    with tab9:
         st.subheader("Performance Dashboard")
 
         col1, col2, col3 = st.columns(3)
@@ -852,7 +1116,7 @@ Final Observation
         col5.metric("Method Complexity", method_complexity)
         col6.metric("Dataset Type", image_type)
 
-        st.metric("Compute Backend", get_compute_backend())
+        st.metric("Compute Backend", get_compute_backend(load_tensorflow=deep_method_selected))
         st.info(f"Estimated Computational Complexity: {method_complexity}")
 
 
