@@ -20,8 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy the requirements file first to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install Python packages
-RUN pip install --no-cache-dir --upgrade pip && \
+# Install Python packages (swapping tensorflow with tensorflow-cpu to reduce download and image size)
+RUN sed -i 's/^tensorflow$/tensorflow-cpu/' requirements.txt && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # Copy the rest of the application files to the container
