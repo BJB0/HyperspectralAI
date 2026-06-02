@@ -1,0 +1,22 @@
+# Exclude python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Exclude local environment files
+venv/
+.venv/
+.env
+
+# Exclude Git files
+.git/
+.gitignore
+
+# Exclude local test files and outputs
+scratch/
+outputs/
+.streamlit/config.toml.bak
+
+# Exclude document reports
+*.docx

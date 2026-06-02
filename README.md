@@ -103,6 +103,22 @@ streamlit run app.py
 
 Then open the local Streamlit URL shown in the terminal.
 
+### Running with Docker
+
+Alternatively, you can run the application inside a Docker container:
+
+1. **Build the Docker Image**:
+   ```bash
+   docker build -t hyperclusterai .
+   ```
+
+2. **Run the Docker Container**:
+   ```bash
+   docker run -p 8501:8501 hyperclusterai
+   ```
+
+Then visit `http://localhost:8501` in your browser.
+
 The app uses lazy loading for TensorFlow-based methods, so the dashboard opens quickly and TensorFlow is loaded only when Autoencoder, CNN Autoencoder, or DEC is executed.
 
 ## Supported Inputs
