@@ -47,10 +47,12 @@ def calculate_metrics(true_labels, pred_labels):
     for r, c in zip(row_ind, col_ind):
         mapping[c] = r
 
-    pred_mapped = np.array([
-        mapping.get(x, x)
-        for x in pred_enc
-    ])
+    # Map labels efficiently using a vectorized numpy array lookup
+    max_val = max(pred_enc.max(), max(mapping.keys(), default=0))
+    lookup = np.arange(max_val + 1)
+    for k, v in mapping.items():
+        lookup[k] = v
+    pred_mapped = lookup[pred_enc]
 
     acc = accuracy_score(
         true_enc,

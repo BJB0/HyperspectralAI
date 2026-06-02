@@ -43,9 +43,18 @@ def run_cnn_autoencoder(
         latent_dim
     )
 
+    # Subsample if the data is very large to speed up CNN training significantly and prevent OOM
+    max_train_samples = 25000
+    if len(patch_cubes) > max_train_samples:
+        import numpy as np
+        indices = np.random.choice(len(patch_cubes), max_train_samples, replace=False)
+        patch_cubes_train = patch_cubes[indices]
+    else:
+        patch_cubes_train = patch_cubes
+
     autoencoder.fit(
-        patch_cubes,
-        patch_cubes,
+        patch_cubes_train,
+        patch_cubes_train,
         epochs=20,
         batch_size=256,
         verbose=0

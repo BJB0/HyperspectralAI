@@ -42,17 +42,26 @@ def run_autoencoder(
         latent_dim
     )
 
+    # Subsample if the data is very large to speed up neural network training significantly
+    max_train_samples = 50000
+    if len(reduced) > max_train_samples:
+        import numpy as np
+        indices = np.random.choice(len(reduced), max_train_samples, replace=False)
+        reduced_train = reduced[indices]
+    else:
+        reduced_train = reduced
+
     autoencoder.fit(
-        reduced,
-        reduced,
+        reduced_train,
+        reduced_train,
         epochs=20,
-        batch_size=256,
+        batch_size=512,  # Larger batch size for faster fitting
         verbose=0
     )
 
     features = encoder.predict(
         reduced,
-        batch_size=256
+        batch_size=512  # Predict all pixels/patches in larger batches
     )
 
     labels = run_kmeans(
