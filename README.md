@@ -73,16 +73,16 @@ Evaluation Metrics + Visualization + Export
 
 ## Method Summary
 
-| Method             | Best For                       | Strength                                    | Tradeoff                       |
-| ------------------ | ------------------------------ | ------------------------------------------- | ------------------------------ |
-| Single Band KMeans | Single-wavelength baseline     | Very fast and interpretable                 | Uses only one spectral band    |
-| False Color KMeans | Three-band HSI baseline        | Better than grayscale and easy to visualize | Discards most spectral bands   |
-| KMeans             | Fast baseline segmentation     | Simple and quick                            | No spatial context             |
-| PCA + KMeans       | High-dimensional RGB/HSI data  | Reduces dimensionality and noise            | Linear feature reduction       |
-| Spatial-Spectral   | Context-aware segmentation     | Uses neighborhood patches                   | Higher memory usage            |
-| Autoencoder        | Nonlinear feature learning     | Learns compact latent embeddings            | Retrains per uploaded image    |
+| Method             | Best For                       | Strength                                    | Tradeoff                         |
+| ------------------ | ------------------------------ | ------------------------------------------- | -------------------------------- |
+| Single Band KMeans | Single-wavelength baseline     | Very fast and interpretable                 | Uses only one spectral band      |
+| False Color KMeans | Three-band HSI baseline        | Better than grayscale and easy to visualize | Discards most spectral bands     |
+| KMeans             | Fast baseline segmentation     | Simple and quick                            | No spatial context               |
+| PCA + KMeans       | High-dimensional RGB/HSI data  | Reduces dimensionality and noise            | Linear feature reduction         |
+| Spatial-Spectral   | Context-aware segmentation     | Uses neighborhood patches                   | Higher memory usage              |
+| Autoencoder        | Nonlinear feature learning     | Learns compact latent embeddings            | Retrains per uploaded image      |
 | CNN Autoencoder    | Spatial-spectral deep features | Preserves local patch structure             | Slower and more memory intensive |
-| DEC                | Research-style deep clustering | Refines clusters in latent space            | Most computationally expensive |
+| DEC                | Research-style deep clustering | Refines clusters in latent space            | Most computationally expensive   |
 
 ## App Workflow
 
@@ -108,6 +108,7 @@ Then open the local Streamlit URL shown in the terminal.
 Alternatively, you can run the application inside a Docker container:
 
 1. **Build the Docker Image**:
+
    ```bash
    docker build -t hyperclusterai .
    ```
